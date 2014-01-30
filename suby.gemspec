@@ -16,6 +16,7 @@ Gem::Specification.new do |s|
   s.add_dependency 'rubyzip', '~> 1.1'
   s.add_dependency 'term-ansicolor', '~> 1.2'
   s.add_dependency 'mime-types', '~> 1.19'
-
+  s.add_dependency 'mime-types', '~> 1.19'
+  s.add_dependency 'charlock_holmes', '~> 0.6.9'
   s.version = '0.4.3'
 end

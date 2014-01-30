@@ -4,6 +4,7 @@ require 'nokogiri'
 require 'xmlrpc/client'
 require 'zlib'
 require 'stringio'
+require 'charlock_holmes'
 
 module Suby
   class Downloader
@@ -153,19 +154,39 @@ module Suby
       end
     end
 
+    def try_convert_to_utf8(content, lang)
+      detected = CharlockHolmes::EncodingDetector.detect(content)[:encoding]
+      if detected == 'UTF-8'
+        content
+      elsif lang == :fr
+        yield 'ISO-8859-1' if block_given?
+        content.force_encoding('ISO-8859-1').encode('UTF-8')
+      elsif lang == :cs
+        yield 'windows-1250' if block_given?
+        content.force_encoding('windows-1250').encode('UTF-8')
+      else
+        original = content.encoding
+        content.force_encoding(detected)
+        if content.valid_encoding?
+          yield detected if block_given?
+          content
+        else 
+          content.force_encoding(original)
+        end
+      end
+    end
+
     def success_message
       "Found"
     end
 
+    # encodes subtitles to utf8 from language specific encodings
     def encode(subtitles)
-      if @lang == :fr
-        convert_to_utf8_from_latin1(subtitles) do
-          def self.success_message
-            "#{super} (transcoded from ISO-8859-1)"
-          end
+      try_convert_to_utf8(subtitles, @lang) do |encoding|
+        @encoded_from = encoding
+        def self.success_message
+          "#{super} (transcoded from #{@encoded_from})"
         end
-      else
-        subtitles
       end
     end
   end
