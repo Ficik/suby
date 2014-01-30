@@ -63,6 +63,8 @@ module Suby
       rescue Suby::DownloaderError => error
         error "Error: #{error.message}"
         false
+      rescue => e
+        error "Exception: #{e.message}"
       else
         success downloader.success_message
         true
