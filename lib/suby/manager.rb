@@ -24,19 +24,42 @@ module Suby
       subtitles = find_available_subtitles(file, lang)
       if subtitles.empty?
         @logger.warn("No #{lang} subtitles found for #{file.basename}")
-        return nil
+        nil
       else
         subtitles.sort_by { |s| s.rank}
-        sub = subtitles.first
-        content = sub.download
-        encode_msg = ''
-        if encode
-          content.encode_to_utf8(lang) do |encoding|
-            encode_msg = " (transcoded to #{encoding})"
-          end
+        begin
+          content, sub = try_download(subtitles)
+        rescue DownloaderError => e
+          @logger.warn e.to_s
+          return nil
         end
+        content, encode_msg = encode_subs(content, encode)
         @logger.info("Subtitles downloaded by #{sub.downloader.name}#{encode_msg}")
         [content, sub_extension(content)]
+      end
+    end
+
+    def encode_subs(content, encode = true)
+      encode_msg = ''
+      if encode
+        content.encode_to_utf8(lang) do |encoding|
+          encode_msg = " (transcoded to #{encoding})"
+        end
+      end
+      [content, encode_msg]
+    end
+
+    def try_download(subs)
+      loop do
+        begin
+          raise DownloaderError "No downloader could download subtitles" if subs.empty?
+          sub = subs.pop
+          content = sub.download
+        rescue StandardError => e
+          @logger.info("#{sub.downloader.name} failed: #{e}")
+          next
+        end
+        return [content, sub]
       end
     end
 
@@ -45,7 +68,6 @@ module Suby
       initialize_downloaders if @loaded_downloaders.empty?
       subtitles = @loaded_downloaders.map do |downloader|
         begin
-          # TODO: log success/error
           subs = downloader.search(file, lang)
           subs = [] if subs.nil?
           subs.each do |sub|
