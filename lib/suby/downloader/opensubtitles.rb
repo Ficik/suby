@@ -1,16 +1,21 @@
-module Suby
-  # Based on https://github.com/byroot/ruby-osdb/blob/master/lib/osdb/server.rb
-  class Downloader::OpenSubtitles < Downloader
-    SITE = 'api.opensubtitles.org'
-    FORMAT = :gz
-    XMLRPC_PATH = '/xml-rpc'
-    SUBTITLE_TYPES = [:tvshow, :movie, :unknown]
+require_relative '../xmlrpc_downloader'
 
+module Suby
+
+  class Downloader::OpenSubtitles < XMLRPCDownloader
+
+    NAME = 'OpenSubtitles'
+
+    SITE = 'api.opensubtitles.org'
+    XMLRPC_PATH = '/xml-rpc'
+    LOGIN_LANGUAGE = 'eng'
     USERNAME = ''
     PASSWORD = ''
-    LOGIN_LANGUAGE = 'eng'
-    USER_AGENT = 'Suby v0.4'
 
+    USER_AGENT = 'Suby v2.0'
+
+    FORMAT = :gz
+    SUBTITLE_TYPES = [:tvshow, :movie, :unknown]
     SEARCH_QUERIES_ORDER = [:hash, :name] #There is also search using imdbid but i dont think it usefull as it
                                           #returns subtitles for many different versions
 
@@ -27,17 +32,40 @@ module Suby
     }
     LANG_MAPPING.default = 'all'
 
-    def download_url
-      SEARCH_QUERIES_ORDER.find(lambda { raise NotFoundError, "no subtitles available" }) { |type|
-        if subs = search_subtitles(search_query(type))['data']
-          @type = type
-          break subs
-        end
-      }.first['SubDownloadLink']
+    OpenSubtitle = SubtitlePromise.create do
+      attr_accessor :release_name, :rating
+
+      def calculate_rank
+        0
+      end
+
     end
 
-    def search_subtitles(query)
+    def search(file, lang)
+      parsed = parse_filename(file)
+      subs = search_subtitles(query_by_name(parsed), language(lang))
+      subs_hash = search_subtitles(query_by_hash(file), language(lang))
+
+      subs['data'] = [] unless subs['data']
+      subs_hash['data'] = [] unless subs_hash['data']
+      subs = (subs['data'] + subs_hash['data']).map do |s|
+
+        sub = OpenSubtitle.new
+        sub.rating = s['SubRating']
+        sub.release_name = s['MovieReleaseName']
+        sub.url = s['SubDownloadLink']
+        sub
+      end
+      subs
+    end
+
+    def download(sub)
+      download_file(sub.url, :gz)
+    end
+
+    def search_subtitles(query, lang = false)
       return {} unless query
+      query[:sublanguageid] = lang if lang
       query = [query] unless query.kind_of? Array
       xmlrpc.call('SearchSubtitles', token, query)
     end
@@ -55,29 +83,25 @@ module Suby
       response['token']
     end
 
-    def search_query(type = :hash)
-      return nil unless query = send("search_query_by_#{type}")
-      query.merge(sublanguageid: language(lang))
+    def query_by_name(parsed)
+      if parsed[:type] == :tvshow
+        {
+            query: parsed[:name],
+            season: parsed[:season],
+            episode: parsed[:episode]
+        }
+      else
+        { query: parsed[:name] }
+      end
     end
 
-    def search_query_by_hash
+    def query_by_hash(file)
       { moviehash: MovieHasher.compute_hash(file), moviebytesize: file.size.to_s } if file.exist?
-    end
-
-    def search_query_by_name
-      season && episode ? { query: show, season: season, episode: episode } : { query: file.base.to_s }
-    end
-
-    def search_query_by_imdbid
-      { imdbid: imdbid } if imdbid
     end
 
     def language(lang)
       LANG_MAPPING[lang.to_sym]
     end
 
-    def success_message
-      "Found by #{@type}"
-    end
   end
 end

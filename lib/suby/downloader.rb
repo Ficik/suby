@@ -1,200 +1,43 @@
 require 'net/http'
 require 'cgi/util'
 require 'nokogiri'
-require 'xmlrpc/client'
 require 'zlib'
 require 'stringio'
-require 'charlock_holmes'
+require 'zip'
+require_relative 'subtitles'
 
 module Suby
   class Downloader
-    DOWNLOADERS = []
-    def self.inherited(downloader)
-      DOWNLOADERS << downloader
+
+    NAME = "Unnamed downloader"
+
+    def name
+      self.class::NAME
     end
 
-    attr_reader :show, :season, :episode, :video_data, :file, :lang
-
-    def initialize(file, *args)
-      @file = file
-      @lang = (args.last || 'en').to_sym
-      @video_data = FilenameParser.parse(file)
-      if video_data[:type] == :tvshow
-        @show, @season, @episode = video_data.values_at(:show, :season, :episode)
+    def download_file(url, format = :plain)
+      data = Net::HTTP.get(URI(url))
+      if format == :plain
+        data
+      elsif format == :gz
+        Zlib::GzipReader.new(StringIO.new(data)).read
       end
     end
 
-    def support_video_type?
-      self.class::SUBTITLE_TYPES.include? video_data[:type]
+    def parse_filename(file)
+      FilenameParser.parse(file);
     end
 
-    def to_s
-      self.class.name.sub(/^.+::/, '')
-    end
-
-    def http
-      @http ||= Net::HTTP.new(self.class::SITE).start
-    end
-
-    def xmlrpc
-      @xmlrpc ||= XMLRPC::Client.new(self.class::SITE, self.class::XMLRPC_PATH).tap do |xmlrpc|
-        xmlrpc.http_header_extra = { 'accept-encoding' => 'identity' } if RbConfig::CONFIG['MAJOR'] == '2'
-      end
-    end
-
-    def get(path, initheader = {}, parse_response = true)
-      response = http.get(path, initheader)
-      if parse_response
-        unless Net::HTTPSuccess === response
-          raise DownloaderError, "Invalid response for #{path}: #{response}"
-        end
-        response.body
+    def clear_filename(file)
+      p =parse_filename file
+      if p[:type] == :tvshow
+        "#{p[:name]} s#{"%02d" % p[:season]}e#{"%02d" % p[:episode]}"
+      elsif p[:type] == :movie
+        "#{p[:name]} (#{p[:year]})"
       else
-        response
+        "#{p[:name]}"
       end
     end
 
-    def post(path, data = {}, initheader = {})
-      post = Net::HTTP::Post.new(path, initheader)
-      post.form_data = data
-      response = http.request(post)
-      unless Net::HTTPSuccess === response
-        raise DownloaderError, "Invalid response for #{path}(#{data}): " +
-                               response.inspect
-      end
-      response.body
-    end
-
-    def get_redirection(path, initheader = {})
-      response = http.get(path, initheader)
-      location = response['Location']
-      unless (Net::HTTPFound === response or
-              Net::HTTPSuccess === response) and location
-        raise DownloaderError, "Invalid response for #{path}: " +
-              "#{response}: location: #{location.inspect}, #{response.body}"
-      end
-      location
-    end
-
-    def download
-      begin
-        extract download_url
-      rescue Net::ReadTimeout => error
-        raise Suby::DownloaderError, error.message
-      end
-    end
-
-    def subtitles(url_or_response = download_url)
-      if Net::HTTPSuccess === url_or_response
-        url_or_response.body
-      else
-        get(url_or_response)
-      end
-    end
-
-    def extract(url_or_response)
-      contents = subtitles(url_or_response)
-      http.finish
-      format = self.class::FORMAT
-      case format
-      when :file
-        # nothing special to do
-      when :gz
-        begin
-          gz = Zlib::GzipReader.new(StringIO.new(contents))
-          contents = gz.read
-        ensure
-          gz.close if gz
-        end
-      when :zip
-        TEMP_ARCHIVE.write contents
-        Suby.extract_sub_from_archive(TEMP_ARCHIVE, format, TEMP_SUBTITLES)
-        contents = TEMP_SUBTITLES.read
-      else
-        raise "unknown subtitles format: #{format}"
-      end
-      sub_name(contents).write encode contents
-    end
-
-    def sub_name(contents)
-      file.sub_ext sub_extension(contents)
-    end
-
-    def sub_extension(contents)
-      if contents[0..10] =~ /1\r?\n/
-        'srt'
-      else
-        'sub'
-      end
-    end
-
-    def imdbid
-      @imdbid ||= begin
-        nfo_file = find_nfo_file
-        convert_to_utf8_from_latin1(nfo_file.read)[%r!imdb\.[^/]+/title/tt(\d+)!i, 1] if nfo_file
-      end
-    end
-
-    def find_nfo_file
-      @file.dir.children.find { |file| file.ext == "nfo" }
-    end
-
-    def convert_to_utf8_from_latin1(content)
-      if content.valid_encoding?
-        content
-      else
-        enc = content.encoding
-        if content.force_encoding("ISO-8859-1").valid_encoding?
-          yield if block_given?
-          content.encode("UTF-8")
-        else
-          # restore original encoding
-          subtitles.force_encoding(enc)
-        end
-      end
-    end
-
-    def try_convert_to_utf8(content, lang)
-      detected = CharlockHolmes::EncodingDetector.detect(content)[:encoding]
-      if detected == 'UTF-8'
-        content
-      elsif lang == :fr
-        yield 'ISO-8859-1' if block_given?
-        content.force_encoding('ISO-8859-1').encode('UTF-8')
-      elsif lang == :cs
-        yield 'windows-1250' if block_given?
-        content.force_encoding('windows-1250').encode('UTF-8')
-      else
-        original = content.encoding
-        content.force_encoding(detected)
-        if content.valid_encoding?
-          yield detected if block_given?
-          content
-        else 
-          content.force_encoding(original)
-        end
-      end
-    end
-
-    def success_message
-      "Found"
-    end
-
-    # encodes subtitles to utf8 from language specific encodings
-    def encode(subtitles)
-      try_convert_to_utf8(subtitles, @lang) do |encoding|
-        @encoded_from = encoding
-        def self.success_message
-          "#{super} (transcoded from #{@encoded_from})"
-        end
-      end
-    end
   end
 end
-
-# Defines downloader order
-%w[
-    opensubtitles
-    tvsubtitles
-    addic7ed
-  ].each { |downloader| require_relative "downloader/#{downloader}" }

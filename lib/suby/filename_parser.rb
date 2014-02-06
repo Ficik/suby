@@ -75,7 +75,7 @@ module Suby
       filename = file.basename.to_s
       if TVSHOW_PATTERNS.find { |pattern| pattern.match(filename) }
         m = $~
-        { type: :tvshow, show: clean_show_name(m[:show]), season: m[:season].to_i, episode: m[:episode].to_i }
+        { type: :tvshow, name: clean_show_name(m[:show]), season: m[:season].to_i, episode: m[:episode].to_i }
       elsif m = MOVIE_PATTERN.match(filename)
         { type: :movie, name: clean_show_name(m[:movie]), year: m[:year].to_i }
       else

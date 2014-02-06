@@ -29,3 +29,9 @@ module Suby
     end
   end
 end
+
+class String
+  def movie_hash
+    Suby::MovieHasher.compute_hash(self)
+  end
+end

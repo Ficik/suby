@@ -3,17 +3,44 @@
 require_relative '../lib/suby'
 require 'optparse'
 
-options = {}
+options = {
+  force: false,
+  encode: false,
+  langext: false,
+  langs: [:en],
+  downloaders: []
+}
 option_parser = OptionParser.new do |opts|
   opts.banner = "#{File.basename $0} [options] video"
   opts.separator '  Find and download subtitles for the given video file'
   opts.separator "\nOptions:"
 
-  opts.on '-l', '--lang LANG = en', 'Lang for subtitles' do |lang|
-    options[:lang] = lang
+  opts.on '-l', '--lang LANG = en', 'Lang for subtitles separated by comma' do |langs|
+    options[:langs] = langs.downcase.split(',').map { |x| x.strip.to_sym }
   end
 
-  opts.on '-f', '--force', 'Force subtitles download even if already exists' do |lang|
+  opts.on '-d', '--downloader DOWNLOADER', 'Downloader to use (separate with comma)' do |downloader|
+    options[:downloaders] = downloader.downcase.split(',').map { |x| x.strip }
+  end
+
+  opts.on '-e', '--encode', 'Encode subtitles to utf-8' do
+    options[:encode] = true
+  end
+
+  opts.on '--show-downloaders', 'Show available downloaders' do
+    # TODO: show available downloaders
+    puts "Available downloaders:"
+    Suby::Manager.new.downloaders.keys.each do |d|
+      puts "  #{d.to_s}"
+    end
+    exit
+  end
+
+  opts.on '-x', '--langext', 'Append language code to subtitle\'s filename' do
+    options[:langext] = true
+  end
+
+  opts.on '-f', '--force', 'Force subtitles download even if already exists' do
     options[:force] = true
   end
 
@@ -27,4 +54,8 @@ option_parser.parse!
 
 puts option_parser if ARGV.empty?
 
-Suby.download_subtitles ARGV, options
+logger = Logger.new(STDOUT)
+logger.formatter = Suby::TerminalLogger.new
+
+s = Suby::Suby.new(options, logger)
+s.download_subtitles(ARGV)
